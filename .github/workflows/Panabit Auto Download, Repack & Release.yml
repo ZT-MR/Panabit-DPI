@@ -1,12 +1,12 @@
-name: Panabit Auto Download, Repack & Release 02
+name: Panabit Auto Download, Repack & Release 03
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: # 支持手动点击 Run workflow 触发
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '0 0 * * *' # 每天 UTC 0:00 自动定时运行
 
 permissions:
-  contents: write
+  contents: write # 赋予 Release 创建与发布权限
 
 jobs:
   repack-and-release:
@@ -21,9 +21,9 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install System & Python Dependencies
+      - name: Install Dependencies
         run: |
-          pip install playwright beautifulsoup4
+          pip install playwright
           playwright install --with-deps chromium
           sudo apt-get update && sudo apt-get install -y p7zip-full
 
@@ -39,38 +39,34 @@ jobs:
                   context = await browser.new_context(accept_downloads=True, ignore_https_errors=True)
                   page = await context.new_page()
 
-                  # 1. 模拟浏览器打开页面 1 并点击下载 PanabitFREE
+                  # 1. 打开主程序下载页面并获取 PanabitFREE 标准版
                   print('正在打开主程序下载页面...')
                   await page.goto('https://download.panabit.com:9443/?product=panabit', wait_until='networkidle')
                   
-                  # 切换/确认在“标准版”标签（如果需要）
                   standard_tab = page.locator('text=标准版')
                   if await standard_tab.count() > 0:
                       await standard_tab.first.click()
                       await page.wait_for_timeout(1000)
 
-                  # 定位包含 PanabitFREE 和 Linux3.tar.gz 的下载块中的“立即下载”按钮
                   download1_promise = page.wait_for_event('download')
-                  # 优先通过 file_md5 按钮或文本匹配点击
                   btn1 = page.locator('div.paui-package-item:has(h6:has-text(\"PanabitFREE\")) button:has-text(\"立即下载\")')
                   await btn1.click()
                   
                   download1 = await download1_promise
                   await download1.save_as('panabit_pkg.tar.gz')
-                  print('主程序包下载完成！')
+                  print('主程序包下载成功！')
 
-                  # 2. 模拟浏览器打开页面 2 并点击下载 DPI 特征包 (amd64)
+                  # 2. 打开 DPI 特征包页面并获取 Linux amd64 版本
                   print('正在打开 DPI 特征包页面...')
                   await page.goto('https://download.panabit.com:9443/dpi.php', wait_until='networkidle')
 
                   download2_promise = page.wait_for_event('download')
-                  # 匹配文件名包含 DPI_Linux 且包含 amd64 的项
                   btn2 = page.locator('div.paui-package-item:has(h6:has-text(\"DPI_Linux\")):has(h6:has-text(\"amd64\")) button:has-text(\"立即下载\")')
                   await btn2.click()
 
                   download2 = await download2_promise
                   await download2.save_as('dpi_pkg.pdb')
-                  print('DPI 特征包下载完成！')
+                  print('DPI 特征包下载成功！')
 
                   await browser.close()
 
@@ -79,32 +75,45 @@ jobs:
 
       - name: Unpack, Replace, and Repack
         run: |
-          # 1. 校验并解压主程序包
-          file panabit_pkg.tar.gz
-          tar -zxvf panabit_pkg.tar.gz
+          # 1. 静默解压主程序包（不带 -v 参数，避免日志写满溢出）
+          tar -zxf panabit_pkg.tar.gz
           
-          # 动态获取解压文件夹名称
+          # 动态提取解压出来的目录名
           MAIN_DIR=$(tar -ztf panabit_pkg.tar.gz | head -n 1 | cut -d'/' -f1)
           echo "主包解压目录: $MAIN_DIR"
 
-          # 2. 使用 7z 解压 .pdb 特征包
-          7z x dpi_pkg.pdb -oPDB_EXTRACTED
+          # 2. 解压 .pdb 特征包
+          mkdir -p PDB_EXTRACTED
+          7z x dpi_pkg.pdb -oPDB_EXTRACTED -y
+          
+          # 如果 .pdb 内部还嵌套有 .tar 包，自动进行二次解压
+          INNER_TAR=$(find PDB_EXTRACTED -name "*.tar" -o -name "*.tar.gz" 2>/dev/null)
+          if [ -n "$INNER_TAR" ]; then
+              echo "检测到内层压缩包 $INNER_TAR，正在解压..."
+              tar -xf "$INNER_TAR" -C PDB_EXTRACTED/
+          fi
 
-          # 3. 替换 dict.so 和 dpi.so 到 $MAIN_DIR/bin/
-          DICT_SRC=$(find PDB_EXTRACTED -name "dict.so")
-          DPI_SRC=$(find PDB_EXTRACTED -name "dpi.so")
+          # 3. 提取 dict.so 和 dpi.so 并强行替换到 bin 目录
+          DICT_SRC=$(find PDB_EXTRACTED -name "dict.so" | head -n 1)
+          DPI_SRC=$(find PDB_EXTRACTED -name "dpi.so" | head -n 1)
 
-          echo "复制 $DICT_SRC 到 $MAIN_DIR/bin/"
+          if [ -z "$DICT_SRC" ] || [ -z "$DPI_SRC" ]; then
+              echo "错误：未能在 PDB 中查找到 dict.so 或 dpi.so 文件！"
+              find PDB_EXTRACTED
+              exit 1
+          fi
+
+          echo "替换文件: $DICT_SRC -> $MAIN_DIR/bin/"
           cp -f "$DICT_SRC" "$MAIN_DIR/bin/"
           
-          echo "复制 $DPI_SRC 到 $MAIN_DIR/bin/"
+          echo "替换文件: $DPI_SRC -> $MAIN_DIR/bin/"
           cp -f "$DPI_SRC" "$MAIN_DIR/bin/"
 
-          # 4. 重新打包为 .tar.gz
+          # 4. 重新静默打包为 .tar.gz
           OUT_NAME="${MAIN_DIR}_DPI_Updated.tar.gz"
-          tar -zcvf "$OUT_NAME" "$MAIN_DIR"
+          tar -zcf "$OUT_NAME" "$MAIN_DIR"
 
-          # 写入 Github 环境变量
+          # 写入环境变量供下一步使用
           echo "FINAL_PACKAGE=$OUT_NAME" >> $GITHUB_ENV
           echo "RELEASE_TAG=v$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_ENV
 
@@ -115,9 +124,9 @@ jobs:
           name: Panabit Repack Release ${{ env.RELEASE_TAG }}
           body: |
             自动合并 PanabitFREE 标准版主程序与最新 DPI Linux amd64 特征包。
-            已替换二进制文件：
-            - `dict.so`
-            - `dpi.so`
+            已覆盖二进制文件：
+            - `bin/dict.so`
+            - `bin/dpi.so`
           draft: false
           prerelease: false
           files: ${{ env.FINAL_PACKAGE }}
