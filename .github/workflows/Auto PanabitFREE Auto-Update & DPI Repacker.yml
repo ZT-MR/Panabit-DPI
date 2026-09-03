@@ -52,8 +52,8 @@ jobs:
                   browser = await p.chromium.launch(headless=True)
                   context = await browser.new_context(accept_downloads=True, ignore_https_errors=True)
 
-                  # 2. 获取主程序 MD5 (在独立标签页 page1 中操作)
-                  print('正在检查主程序更新...')
+                  # 2. 获取PanabitFREE系统升级包 MD5 (在独立标签页 page1 中操作)
+                  print('正在检查PanabitFREE系统升级包更新...')
                   page1 = await context.new_page()
                   await page1.goto('https://download.panabit.com:9443/?product=panabit', wait_until='networkidle')
                   standard_tab = page1.locator('text=标准版')
@@ -87,7 +87,7 @@ jobs:
 
                   print('检测到新版本/特征库更新，开始下载文件...')
                   
-                  # 在 page1 下载主程序包
+                  # 在 page1 下载PanabitFREE系统升级包
                   download1_promise = page1.wait_for_event('download')
                   await pkg_item1.locator('button:has-text("立即下载")').click()
                   download1 = await download1_promise
@@ -115,7 +115,7 @@ jobs:
         if: steps.download.outputs.has_update == 'true'
         run: |
           MAIN_DIR=$(tar -ztf panabit_pkg.tar.gz | head -n 1 | cut -d'/' -f1)
-          echo "主包根目录名称: $MAIN_DIR"
+          echo "PanabitFREE系统升级包目录名称: $MAIN_DIR"
 
           tar -zxf panabit_pkg.tar.gz
 
