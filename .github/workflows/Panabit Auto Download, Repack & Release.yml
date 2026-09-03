@@ -1,12 +1,12 @@
-name: Panabit Auto Download, Repack & Release 03
+name: Panabit Auto Download, Repack & Release 04
 
 on:
-  workflow_dispatch: # 支持手动点击 Run workflow 触发
+  workflow_dispatch:
   schedule:
-    - cron: '0 0 * * *' # 每天 UTC 0:00 自动定时运行
+    - cron: '0 0 * * *'
 
 permissions:
-  contents: write # 赋予 Release 创建与发布权限
+  contents: write
 
 jobs:
   repack-and-release:
@@ -25,7 +25,7 @@ jobs:
         run: |
           pip install playwright
           playwright install --with-deps chromium
-          sudo apt-get update && sudo apt-get install -y p7zip-full
+          sudo apt-get update && sudo apt-get install -y p7zip-full file
 
       - name: Download Files via Playwright Browser
         run: |
@@ -39,7 +39,7 @@ jobs:
                   context = await browser.new_context(accept_downloads=True, ignore_https_errors=True)
                   page = await context.new_page()
 
-                  # 1. 打开主程序下载页面并获取 PanabitFREE 标准版
+                  # 1. 打开主程序下载页面
                   print('正在打开主程序下载页面...')
                   await page.goto('https://download.panabit.com:9443/?product=panabit', wait_until='networkidle')
                   
@@ -53,10 +53,10 @@ jobs:
                   await btn1.click()
                   
                   download1 = await download1_promise
+                  orig_name1 = download1.suggested_filename
                   await download1.save_as('panabit_pkg.tar.gz')
-                  print('主程序包下载成功！')
 
-                  # 2. 打开 DPI 特征包页面并获取 Linux amd64 版本
+                  # 2. 打开 DPI 特征包页面
                   print('正在打开 DPI 特征包页面...')
                   await page.goto('https://download.panabit.com:9443/dpi.php', wait_until='networkidle')
 
@@ -65,40 +65,52 @@ jobs:
                   await btn2.click()
 
                   download2 = await download2_promise
+                  orig_name2 = download2.suggested_filename
                   await download2.save_as('dpi_pkg.pdb')
-                  print('DPI 特征包下载成功！')
 
                   await browser.close()
+
+                  # 3. 输出核对信息
+                  size1 = os.path.getsize('panabit_pkg.tar.gz') / (1024 * 1024)
+                  size2 = os.path.getsize('dpi_pkg.pdb') / 1024
+
+                  print('\n' + '='*50)
+                  print('【文件下载成功核对列表】')
+                  print(f'1. 主程序包: {orig_name1} ({size1:.2f} MB) -> 已保存为 panabit_pkg.tar.gz')
+                  print(f'2. DPI特征包: {orig_name2} ({size2:.2f} KB) -> 已保存为 dpi_pkg.pdb')
+                  print('='*50 + '\n')
 
           asyncio.run(main())
           "
 
       - name: Unpack, Replace, and Repack
         run: |
-          # 1. 静默解压主程序包（不带 -v 参数，避免日志写满溢出）
-          tar -zxf panabit_pkg.tar.gz
-          
-          # 动态提取解压出来的目录名
+          # 1. 静默获取主包内的根目录路径
           MAIN_DIR=$(tar -ztf panabit_pkg.tar.gz | head -n 1 | cut -d'/' -f1)
-          echo "主包解压目录: $MAIN_DIR"
+          echo "主包根目录名称: $MAIN_DIR"
 
-          # 2. 解压 .pdb 特征包
+          # 静默解压主包
+          tar -zxf panabit_pkg.tar.gz
+
+          # 2. 解压 .pdb 文件
           mkdir -p PDB_EXTRACTED
-          7z x dpi_pkg.pdb -oPDB_EXTRACTED -y
-          
-          # 如果 .pdb 内部还嵌套有 .tar 包，自动进行二次解压
-          INNER_TAR=$(find PDB_EXTRACTED -name "*.tar" -o -name "*.tar.gz" 2>/dev/null)
-          if [ -n "$INNER_TAR" ]; then
-              echo "检测到内层压缩包 $INNER_TAR，正在解压..."
-              tar -xf "$INNER_TAR" -C PDB_EXTRACTED/
-          fi
+          7z x dpi_pkg.pdb -oPDB_EXTRACTED -y > /dev/null
 
-          # 3. 提取 dict.so 和 dpi.so 并强行替换到 bin 目录
+          # 强力解决无后缀嵌套压缩包问题：遍历 PDB_EXTRACTED 中的所有文件，只要是 POSIX tar archive 就强制解压
+          find PDB_EXTRACTED -type f | while read -r file; do
+              if file "$file" | grep -q "tar archive"; then
+                  echo "识别到 TAR 打包文件: $file，进行二次解压..."
+                  tar -xf "$file" -C PDB_EXTRACTED/
+              fi
+          done
+
+          # 3. 定位并替换 dict.so 和 dpi.so
           DICT_SRC=$(find PDB_EXTRACTED -name "dict.so" | head -n 1)
           DPI_SRC=$(find PDB_EXTRACTED -name "dpi.so" | head -n 1)
 
           if [ -z "$DICT_SRC" ] || [ -z "$DPI_SRC" ]; then
               echo "错误：未能在 PDB 中查找到 dict.so 或 dpi.so 文件！"
+              echo "当前解压目录完整树形结构："
               find PDB_EXTRACTED
               exit 1
           fi
@@ -109,11 +121,10 @@ jobs:
           echo "替换文件: $DPI_SRC -> $MAIN_DIR/bin/"
           cp -f "$DPI_SRC" "$MAIN_DIR/bin/"
 
-          # 4. 重新静默打包为 .tar.gz
+          # 4. 重新打包为 .tar.gz（加上 -q 静默日志）
           OUT_NAME="${MAIN_DIR}_DPI_Updated.tar.gz"
           tar -zcf "$OUT_NAME" "$MAIN_DIR"
 
-          # 写入环境变量供下一步使用
           echo "FINAL_PACKAGE=$OUT_NAME" >> $GITHUB_ENV
           echo "RELEASE_TAG=v$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_ENV
 
