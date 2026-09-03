@@ -1,0 +1,103 @@
+name: Panabit Auto Download and Repack
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * *'
+
+jobs:
+  repack:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install Dependencies
+        run: |
+          pip install requests beautifulsoup4
+          sudo apt-get update && sudo apt-get install -y p7zip-full
+
+      - name: Parse and Download
+        run: |
+          python -c "
+          import requests, urllib3, os
+          from bs4 import BeautifulSoup
+          urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+          BASE_URL = 'https://download.panabit.com:9443/'
+
+          # 1. 下载网络页面1 (PanabitFREE 升级包)
+          res1 = requests.get(BASE_URL + '?product=panabit', verify=False)
+          soup1 = BeautifulSoup(res1.text, 'html.parser')
+          
+          tar_url = None
+          for a in soup1.find_all('a', href=True):
+              if 'PanabitFREE' in a['href'] and a['href'].endswith('.tar.gz'):
+                  tar_url = a['href']
+                  break
+          
+          if not tar_url:
+              raise Exception('未能找到 PanabitFREE .tar.gz 下载链接')
+
+          tar_url = tar_url if tar_url.startswith('http') else BASE_URL + tar_url.lstrip('/')
+          print(f'开始下载主包: {tar_url}')
+          with open('panabit_pkg.tar.gz', 'wb') as f:
+              f.write(requests.get(tar_url, verify=False).content)
+
+          # 2. 下载网络页面2 (DPI 特征库 - amd64)
+          res2 = requests.get(BASE_URL + 'dpi.php', verify=False)
+          soup2 = BeautifulSoup(res2.text, 'html.parser')
+          
+          pdb_url = None
+          for a in soup2.find_all('a', href=True):
+              if 'DPI_Linux' in a['href'] and 'amd64' in a['href'] and a['href'].endswith('.pdb'):
+                  pdb_url = a['href']
+                  break
+
+          if not pdb_url:
+              raise Exception('未能找到 DPI_Linux_...amd64.pdb 下载链接')
+
+          pdb_url = pdb_url if pdb_url.startswith('http') else BASE_URL + pdb_url.lstrip('/')
+          print(f'开始下载 DPI 包: {pdb_url}')
+          with open('dpi_pkg.pdb', 'wb') as f:
+              f.write(requests.get(pdb_url, verify=False).content)
+          "
+
+      - name: Unpack, Replace, and Repack
+        run: |
+          # 1. 解压主程序包 .tar.gz
+          tar -zxvf panabit_pkg.tar.gz
+          # 动态获取解压出来的根目录名 (如 PanabitFREE_TANGr7p10_20260817_Linux3)
+          MAIN_DIR=$(tar -ztf panabit_pkg.tar.gz | head -n 1 | cut -d'/' -f1)
+          echo "主包解压目录: $MAIN_DIR"
+
+          # 2. 使用 7z 解压特征包 .pdb 到独立目录
+          7z x dpi_pkg.pdb -oPDB_EXTRACTED
+
+          # 3. 替换 dict.so 和 dpi.so 到 main/bin/ 目录
+          DICT_SRC=$(find PDB_EXTRACTED -name "dict.so")
+          DPI_SRC=$(find PDB_EXTRACTED -name "dpi.so")
+
+          echo "替换文件: $DICT_SRC -> $MAIN_DIR/bin/"
+          cp -f "$DICT_SRC" "$MAIN_DIR/bin/"
+          
+          echo "替换文件: $DPI_SRC -> $MAIN_DIR/bin/"
+          cp -f "$DPI_SRC" "$MAIN_DIR/bin/"
+
+          # 4. 重新打包为全新的 .tar.gz
+          OUT_NAME="${MAIN_DIR}_DPI_Updated.tar.gz"
+          tar -zcvf "$OUT_NAME" "$MAIN_DIR"
+
+          echo "FINAL_PACKAGE=$OUT_NAME" >> $GITHUB_ENV
+
+      - name: Upload Repacked Package
+        uses: actions/upload-artifact@v4
+        with:
+          name: Panabit-Updated-Package
+          path: ${{ env.FINAL_PACKAGE }}
