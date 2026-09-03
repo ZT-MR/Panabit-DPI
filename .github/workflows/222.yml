@@ -61,7 +61,7 @@ jobs:
                   browser = await p.chromium.launch(headless=True)
                   context = await browser.new_context(accept_downloads=True, ignore_https_errors=True)
 
-                  # 2. 检查主程序官网信息
+                  # 2. 检查PanabitFREE系统升级包官网信息
                   page1 = await context.new_page()
                   await page1.goto('https://download.panabit.com:9443/?product=panabit', wait_until='networkidle')
                   standard_tab = page1.locator('text=标准版')
@@ -77,14 +77,14 @@ jobs:
                   download1 = await download1_promise
                   official_main_filename = download1.suggested_filename
 
-                  print(f"官方最新主程序文件名: {official_main_filename}")
+                  print(f"官方最新PanabitFREE系统升级包文件名: {official_main_filename}")
                   if official_main_filename not in local_panabit_files:
-                      print("检测到官方主程序有更新/本地缺失，开始保存...")
+                      print("检测到PanabitFREE系统升级包有更新/本地缺失，开始保存...")
                       save_path = os.path.join('Panabit', official_main_filename)
                       await download1.save_as(save_path)
                       panabit_updated = True
                   else:
-                      print("主程序版本与本地一致，跳过下载。")
+                      print("PanabitFREE系统升级包版本与本地一致，跳过下载。")
 
                   # 3. 检查 DPI 特征库官网信息
                   page2 = await context.new_page()
@@ -188,7 +188,7 @@ jobs:
           LATEST_PANABIT="${{ steps.check_published.outputs.used_main_name }}"
           LATEST_DPI="${{ steps.check_published.outputs.used_dpi_name }}"
 
-          echo "选用的主程序包: $LATEST_PANABIT"
+          echo "选用的系统升级包: $LATEST_PANABIT"
           echo "选用的 DPI 特征包: $LATEST_DPI"
 
           # 准备进行合并
@@ -196,9 +196,9 @@ jobs:
           cp "DPI/$LATEST_DPI" dpi_pkg.pdb
 
           MAIN_DIR=$(tar -ztf panabit_pkg.tar.gz | head -n 1 | cut -d'/' -f1)
-          echo "主包根目录名称: $MAIN_DIR"
+          echo "升级包根目录名称: $MAIN_DIR"
 
-          # 解压主包并保留文件属性 (-p)
+          # 解压系统升级包并保留文件属性 (-p)
           tar -zxf panabit_pkg.tar.gz -p
 
           mkdir -p PDB_EXTRACTED
@@ -231,10 +231,10 @@ jobs:
           tag_name: ${{ env.RELEASE_TAG }}
           name: Panabit Standard (x86/Linux) - DPI Updated ${{ env.RELEASE_TAG }}
           body: |
-            Panabit 标准版 DPI 特征库合并打补丁包。
+            本 Release 由 GitHub Actions 自动构建，自动合并Panabit标准版（PanabitFREE）最新升级包与 DPI Linux amd64 特征包。
 
             ### 📦 合并来源文件
-            - **主程序包**: `${{ steps.check_published.outputs.used_main_name }}`
+            - **系统升级包**: `${{ steps.check_published.outputs.used_main_name }}`
             - **DPI 特征包**: `${{ steps.check_published.outputs.used_dpi_name }}`
 
             ### 🔧 变更说明
