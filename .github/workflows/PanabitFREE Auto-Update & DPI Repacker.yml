@@ -130,7 +130,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          name: Panabit Repack Release ${{ env.RELEASE_TAG }}
+          name: PanabitFREE Repack Release ${{ env.RELEASE_TAG }}
           body: |
             自动合并 PanabitFREE 标准版最新升级包与 DPI Linux amd64 特征包。
             
