@@ -132,7 +132,7 @@ jobs:
           tag_name: ${{ env.RELEASE_TAG }}
           name: PanabitFREE Repack Release ${{ env.RELEASE_TAG }}
           body: |
-            自动合并 PanabitFREE 标准版最新升级包与 DPI Linux amd64 特征包。
+            本 Release 由 GitHub Actions 自动构建，自动合并Panabit标准版（PanabitFREE）最新升级包与 DPI Linux amd64 特征包。
             
             - **系统架构**: `x86/Linux (amd64)`
             - **包含替换**:
