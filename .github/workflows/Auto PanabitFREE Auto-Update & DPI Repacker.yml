@@ -1,4 +1,4 @@
-name: Panabit Repack with Latest DPI  0000
+name: Panabit Repack with Latest DPI  0101
 
 on:
   workflow_dispatch:
@@ -29,7 +29,81 @@ jobs:
 
       - name: Download Files and Check for Updates
         id: download
-        run: python check_and_download.py
+        run: |
+          python - << 'EOF'
+          import os, asyncio, requests
+          from playwright.async_api import async_playwright
+
+          async def main():
+              # 1. 查询 GitHub 上一次最新 Release 的记录
+              repo = os.environ.get('GITHUB_REPOSITORY')
+              token = os.environ.get('GITHUB_TOKEN')
+              headers_gh = {'Authorization': f'token {token}', 'Accept': 'application/vnd.github.v3+json'}
+              
+              last_md5_combined = ''
+              rel_res = requests.get(f'https://api.github.com/repos/{repo}/releases/latest', headers=headers_gh)
+              if rel_res.status_code == 200:
+                  rel_body = rel_res.json().get('body', '')
+                  for line in rel_body.splitlines():
+                      if 'COMBINED_MD5:' in line:
+                          last_md5_combined = line.split('COMBINED_MD5:')[1].strip()
+
+              async with async_playwright() as p:
+                  browser = await p.chromium.launch(headless=True)
+                  context = await browser.new_context(accept_downloads=True, ignore_https_errors=True)
+                  page = await context.new_page()
+
+                  # 打开主程序页面并抓取 MD5
+                  print('正在检查主程序更新...')
+                  await page.goto('https://download.panabit.com:9443/?product=panabit', wait_until='networkidle')
+                  standard_tab = page.locator('text=标准版')
+                  if await standard_tab.count() > 0:
+                      await standard_tab.first.click()
+                      await page.wait_for_timeout(1000)
+
+                  pkg_item1 = page.locator('div.paui-package-item:has(h6:has-text("PanabitFREE"))')
+                  md5_1_text = await pkg_item1.locator('li:has-text("MD5:")').inner_text()
+                  md5_1 = md5_1_text.replace('MD5:', '').strip()
+
+                  # 打开 DPI 页面并抓取 MD5
+                  print('正在检查 DPI 特征库更新...')
+                  await page.goto('https://download.panabit.com:9443/dpi.php', wait_until='networkidle')
+                  pkg_item2 = page.locator('div.paui-package-item:has(h6:has-text("DPI_Linux")):has(h6:has-text("amd64"))')
+                  md5_2_text = await pkg_item2.locator('li:has-text("MD5:")').inner_text()
+                  md5_2 = md5_2_text.replace('MD5:', '').strip()
+
+                  current_combined_md5 = f'{md5_1}_{md5_2}'
+                  print(f'当前官方 MD5: {current_combined_md5}')
+                  print(f'上次发布 MD5: {last_md5_combined}')
+
+                  # 比对 MD5：无更新则停止
+                  if current_combined_md5 == last_md5_combined and last_md5_combined != '':
+                      print('【提示】官方未发布新版本/特征库，停止当前任务。')
+                      with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                          f.write('has_update=false\n')
+                      await browser.close()
+                      return
+
+                  print('检测到新版本/特征库更新，开始下载文件...')
+                  
+                  download1_promise = page.wait_for_event('download')
+                  await pkg_item1.locator('button:has-text("立即下载")').click()
+                  download1 = await download1_promise
+                  await download1.save_as('panabit_pkg.tar.gz')
+
+                  download2_promise = page.wait_for_event('download')
+                  await pkg_item2.locator('button:has-text("立即下载")').click()
+                  download2 = await download2_promise
+                  await download2.save_as('dpi_pkg.pdb')
+
+                  await browser.close()
+
+                  with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                      f.write('has_update=true\n')
+                      f.write(f'combined_md5={current_combined_md5}\n')
+
+          asyncio.run(main())
+          EOF
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
