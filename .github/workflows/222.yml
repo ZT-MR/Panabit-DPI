@@ -27,16 +27,25 @@ jobs:
           playwright install --with-deps chromium
           sudo apt-get update && sudo apt-get install -y p7zip-full file
 
+      - name: Prepare Workspace Directories
+        run: |
+          # 如果根目录下存在名为 Panabit 或 DPI 的文件而非文件夹，则将其删除并重新创建为目录
+          [ -f "Panabit" ] && rm -f "Panabit"
+          [ -f "DPI" ] && rm -f "DPI"
+          mkdir -p Panabit DPI
+
       - name: Check Official Updates and Download to Directories
         id: sync
         run: |
           python - << 'EOF'
-          import os, glob, asyncio, glob
+          import os, glob, asyncio
           from playwright.async_api import async_playwright
 
           async def main():
-              os.makedirs('Panabit', exist_ok=True)
-              os.makedirs('DPI', exist_ok=True)
+              if not os.path.exists('Panabit'):
+                  os.makedirs('Panabit', exist_ok=True)
+              if not os.path.exists('DPI'):
+                  os.makedirs('DPI', exist_ok=True)
 
               # 1. 获取本地已存在的文件列表
               local_panabit_files = set(os.path.basename(f) for f in glob.glob('Panabit/*') if os.path.isfile(f))
@@ -98,10 +107,8 @@ jobs:
 
                   await browser.close()
 
-              # 判断是否触发后续的发布（只要有新下载或者本地有更新，或者手动触发）
               has_changes = panabit_updated or dpi_updated
 
-              # 即使官方没更新，如果用户手动提交了文件，也需要打包发布
               with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
                   f.write(f'has_official_update={str(has_changes).lower()}\n')
 
@@ -121,18 +128,65 @@ jobs:
           git commit -m "Auto sync latest official packages [skip ci]" || echo "No changes to commit"
           git push
 
+      - name: Check If Package Combination Has Been Published
+        id: check_published
+        run: |
+          python - << 'EOF'
+          import os, glob, requests
+
+          # 1. 扫描 Panabit/ 与 DPI/ 目录下最新文件
+          panabit_files = sorted(glob.glob('Panabit/*'), key=os.path.getmtime, reverse=True)
+          dpi_files = sorted(glob.glob('DPI/*'), key=os.path.getmtime, reverse=True)
+
+          if not panabit_files or not dpi_files:
+              print("错误: Panabit/ 或 DPI/ 目录为空！")
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                  f.write("should_repack=false\n")
+              exit(0)
+
+          latest_main_name = os.path.basename(panabit_files[0])
+          latest_dpi_name = os.path.basename(dpi_files[0])
+          combination_id = f"{latest_main_name}___{latest_dpi_name}"
+
+          print(f"当前最新组合: Panabit=[{latest_main_name}], DPI=[{latest_dpi_name}]")
+
+          # 2. 从 GitHub Release 查询最新一期的发布记录
+          repo = os.environ.get('GITHUB_REPOSITORY')
+          token = os.environ.get('GITHUB_TOKEN')
+          headers_gh = {'Authorization': f'token {token}', 'Accept': 'application/vnd.github.v3+json'}
+
+          last_published_combo = ''
+          rel_res = requests.get(f'https://api.github.com/repos/{repo}/releases/latest', headers=headers_gh)
+          if rel_res.status_code == 200:
+              rel_body = rel_res.json().get('body', '')
+              for line in rel_body.splitlines():
+                  if 'PKG_COMBINATION:' in line:
+                      last_published_combo = line.split('PKG_COMBINATION:')[1].strip()
+
+          print(f"上次已发布的组合: [{last_published_combo}]")
+
+          # 3. 校验是否已经发布过
+          if combination_id == last_published_combo:
+              print("【提示】当前文件组合与最近一次 GitHub Release 完全一致，无需重复合并打包！")
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                  f.write("should_repack=false\n")
+          else:
+              print("检测到新文件组合，准备开始合并打包...")
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                  f.write("should_repack=true\n")
+                  f.write(f"used_main_name={latest_main_name}\n")
+                  f.write(f"used_dpi_name={latest_dpi_name}\n")
+                  f.write(f"pkg_combination={combination_id}\n")
+          EOF
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Find Latest Files in Directories and Repack
+        if: steps.check_published.outputs.should_repack == 'true'
         id: repack
         run: |
-          # 提取 Panabit/ 目录下最新修改的文件（支持手动上传/新下载）
-          LATEST_PANABIT=$(ls -t Panabit/ | head -n 1)
-          # 提取 DPI/ 目录下最新修改的文件（支持手动上传/新下载）
-          LATEST_DPI=$(ls -t DPI/ | head -n 1)
-
-          if [ -z "$LATEST_PANABIT" ] || [ -z "$LATEST_DPI" ]; then
-            echo "错误: Panabit/ 或 DPI/ 目录为空，请确认文件存在！"
-            exit 1
-          fi
+          LATEST_PANABIT="${{ steps.check_published.outputs.used_main_name }}"
+          LATEST_DPI="${{ steps.check_published.outputs.used_dpi_name }}"
 
           echo "选用的主程序包: $LATEST_PANABIT"
           echo "选用的 DPI 特征包: $LATEST_DPI"
@@ -170,10 +224,8 @@ jobs:
           echo "FINAL_PACKAGE=$OUT_NAME" >> $GITHUB_ENV
           echo "RELEASE_TAG=v$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_ENV
 
-          echo "used_main_name=$LATEST_PANABIT" >> $GITHUB_OUTPUT
-          echo "used_dpi_name=$LATEST_DPI" >> $GITHUB_OUTPUT
-
       - name: Publish to GitHub Releases
+        if: steps.check_published.outputs.should_repack == 'true'
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
@@ -182,14 +234,17 @@ jobs:
             Panabit 标准版 DPI 特征库合并打补丁包。
 
             ### 📦 合并来源文件
-            - **主程序包**: `${{ steps.repack.outputs.used_main_name }}`
-            - **DPI 特征包**: `${{ steps.repack.outputs.used_dpi_name }}`
+            - **主程序包**: `${{ steps.check_published.outputs.used_main_name }}`
+            - **DPI 特征包**: `${{ steps.check_published.outputs.used_dpi_name }}`
 
             ### 🔧 变更说明
             - **系统架构**: `x86/Linux (amd64)`
             - **替换文件** (已保留原始特征库文件属性及修改时间戳):
               - `bin/dict.so`
               - `bin/dpi.so`
+
+            <!-- 用于自动校验文件组合是否重复发布的隐藏标记 -->
+            PKG_COMBINATION:${{ steps.check_published.outputs.pkg_combination }}
           draft: false
           prerelease: false
           files: ${{ env.FINAL_PACKAGE }}
