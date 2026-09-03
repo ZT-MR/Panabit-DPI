@@ -1,4 +1,4 @@
-name: Panabit Repack with Latest DPI
+name: Panabit Repack with Latest DPI  001
 
 on:
   workflow_dispatch:
@@ -87,16 +87,18 @@ jobs:
 
                   print('检测到新版本/特征库更新，开始下载文件...')
                   
-                  # 在 page1 下载主程序包
+                  # 在 page1 下载主程序包并获取原始文件名
                   download1_promise = page1.wait_for_event('download')
                   await pkg_item1.locator('button:has-text("立即下载")').click()
                   download1 = await download1_promise
+                  orig_main_name = download1.suggested_filename
                   await download1.save_as('panabit_pkg.tar.gz')
 
-                  # 在 page2 下载 DPI 特征包
+                  # 在 page2 下载 DPI 特征包并获取原始文件名
                   download2_promise = page2.wait_for_event('download')
                   await pkg_item2.locator('button:has-text("立即下载")').click()
                   download2 = await download2_promise
+                  orig_dpi_name = download2.suggested_filename
                   await download2.save_as('dpi_pkg.pdb')
 
                   await browser.close()
@@ -105,6 +107,8 @@ jobs:
                   with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
                       f.write('has_update=true\n')
                       f.write(f'combined_md5={current_combined_md5}\n')
+                      f.write(f'orig_main_name={orig_main_name}\n')
+                      f.write(f'orig_dpi_name={orig_dpi_name}\n')
 
           asyncio.run(main())
           EOF
@@ -117,13 +121,13 @@ jobs:
           MAIN_DIR=$(tar -ztf panabit_pkg.tar.gz | head -n 1 | cut -d'/' -f1)
           echo "主包根目录名称: $MAIN_DIR"
 
-          # 解压主包并保留属性 (-p)
+          # 解压主包并保留文件属性 (-p)
           tar -zxf panabit_pkg.tar.gz -p
 
           mkdir -p PDB_EXTRACTED
           7z x dpi_pkg.pdb -oPDB_EXTRACTED -y > /dev/null
 
-          # 二次递归解压嵌套的 tar 文件，并保留时间戳
+          # 二次递归解压嵌套的 tar 文件，保留时间戳
           find PDB_EXTRACTED -type f | while read -r file; do
               if file "$file" | grep -q "tar archive"; then
                   tar -xf "$file" -C PDB_EXTRACTED/ -p
@@ -152,8 +156,13 @@ jobs:
           body: |
             Panabit 标准版 DPI 特征库自动补丁包。
 
+            ### 📦 官方原始程序包信息
+            - **官方主程序包**: `${{ steps.download.outputs.orig_main_name }}`
+            - **官方 DPI 特征包**: `${{ steps.download.outputs.orig_dpi_name }}`
+
+            ### 🔧 变更说明
             - **系统架构**: `x86/Linux (amd64)`
-            - **包含替换**:
+            - **替换文件** (保留原始特征库文件属性及修改时间戳):
               - `bin/dict.so`
               - `bin/dpi.so`
 
