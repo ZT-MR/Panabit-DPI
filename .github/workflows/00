@@ -1,0 +1,131 @@
+name: Panabit Auto Download, Repack & Release
+
+on:
+  workflow_dispatch: # 支持手动点击运行
+  schedule:
+    - cron: '0 0 * * *' # 每天 UTC 0:00 定时运行
+
+permissions:
+  contents: write # 赋予 Release 发布权限
+
+jobs:
+  repack-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install Dependencies
+        run: |
+          pip install requests
+          sudo apt-get update && sudo apt-get install -y p7zip-full
+
+      - name: Download Files via API
+        run: |
+          python -c "
+          import requests, urllib3, os
+          urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+          headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+
+          # 1. 获取网络页面 1 (标准版 PanabitFREE .tar.gz)
+          # 通过页面 API 获取最新的包列表并检索 PanabitFREE + Linux3.tar.gz
+          list_url1 = 'https://download.panabit.com:9443/json/index.php?r=package&action=get_package_list&product=panabit'
+          r1 = requests.get(list_url1, headers=headers, verify=False)
+          data1 = r1.json()
+
+          file_md5_1 = None
+          filename1 = None
+
+          # 解析 API 返回数据找到标准版文件
+          for item in data1.get('data', []):
+              fname = item.get('filename', '')
+              if 'PanabitFREE' in fname and fname.endswith('.tar.gz'):
+                  file_md5_1 = item.get('file_md5')
+                  filename1 = fname
+                  break
+
+          if not file_md5_1:
+              raise Exception('未能从 API 获取到 PanabitFREE 的 file_md5')
+
+          dl_url1 = f'https://download.panabit.com:9443/json/index.php?r=package&action=download_package&file_md5={file_md5_1}'
+          print(f'正在下载主程序包 [{filename1}]: {dl_url1}')
+          res1 = requests.get(dl_url1, headers=headers, verify=False)
+          with open('panabit_pkg.tar.gz', 'wb') as f:
+              f.write(res1.content)
+
+
+          # 2. 获取网络页面 2 (DPI 特征库 DPI_Linux ... amd64 .pdb)
+          list_url2 = 'https://download.panabit.com:9443/json/index.php?r=dpi&action=get_dpi_list'
+          r2 = requests.get(list_url2, headers=headers, verify=False)
+          data2 = r2.json()
+
+          file_md5_2 = None
+          filename2 = None
+
+          for item in data2.get('data', []):
+              fname = item.get('filename', '')
+              if 'DPI_Linux' in fname and 'amd64' in fname and fname.endswith('.pdb'):
+                  file_md5_2 = item.get('file_md5')
+                  filename2 = fname
+                  break
+
+          if not file_md5_2:
+              raise Exception('未能从 API 获取到 DPI_Linux amd64 的 file_md5')
+
+          dl_url2 = f'https://download.panabit.com:9443/json/index.php?r=dpi&action=download_dpi&file_md5={file_md5_2}'
+          print(f'正在下载 DPI 特征包 [{filename2}]: {dl_url2}')
+          res2 = requests.get(dl_url2, headers=headers, verify=False)
+          with open('dpi_pkg.pdb', 'wb') as f:
+              f.write(res2.content)
+          "
+
+      - name: Unpack, Replace, and Repack
+        run: |
+          # 1. 解压主程序包 .tar.gz
+          tar -zxvf panabit_pkg.tar.gz
+          MAIN_DIR=$(tar -ztf panabit_pkg.tar.gz | head -n 1 | cut -d'/' -f1)
+          echo "主包解压目录: $MAIN_DIR"
+
+          # 2. 解压特征包 .pdb 到独立目录
+          7z x dpi_pkg.pdb -oPDB_EXTRACTED
+
+          # 3. 替换 dict.so 和 dpi.so 到 $MAIN_DIR/bin/ 目录并强制替换
+          DICT_SRC=$(find PDB_EXTRACTED -name "dict.so")
+          DPI_SRC=$(find PDB_EXTRACTED -name "dpi.so")
+
+          echo "替换文件: $DICT_SRC -> $MAIN_DIR/bin/"
+          cp -f "$DICT_SRC" "$MAIN_DIR/bin/"
+          
+          echo "替换文件: $DPI_SRC -> $MAIN_DIR/bin/"
+          cp -f "$DPI_SRC" "$MAIN_DIR/bin/"
+
+          # 4. 重新打包为 .tar.gz
+          OUT_NAME="${MAIN_DIR}_DPI_Updated.tar.gz"
+          tar -zcvf "$OUT_NAME" "$MAIN_DIR"
+
+          # 输出环境变量供 Release 步骤使用
+          echo "FINAL_PACKAGE=$OUT_NAME" >> $GITHUB_ENV
+          echo "RELEASE_TAG=v$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_ENV
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Panabit Repack Release ${{ env.RELEASE_TAG }}
+          body: |
+            自动下载最新的 PanabitFREE 标准版和 DPI Linux amd64 特征包并替换打包。
+            包含替换文件：
+            - `dict.so`
+            - `dpi.so`
+          draft: false
+          prerelease: false
+          files: ${{ env.FINAL_PACKAGE }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
