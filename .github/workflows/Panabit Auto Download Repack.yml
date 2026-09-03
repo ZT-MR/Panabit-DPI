@@ -1,5 +1,4 @@
-name: Panabit Auto Download, Repack & Release 001
-
+name: PanabitFREE Auto-Update & DPI Repacker
 on:
   workflow_dispatch:
   schedule:
