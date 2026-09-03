@@ -1,4 +1,4 @@
-name: Panabit Repack with Latest DPI
+name: Panabit Repack with Latest DPI 222
 
 on:
   workflow_dispatch:
