@@ -1,4 +1,4 @@
-name: Auto PanabitFREE Update & DPI Repacker
+name: Auto PanabitFREE ISO Update & DPI Repacker
 
 on:
   workflow_dispatch:
