@@ -1,4 +1,4 @@
-# Panabit 系统升级包 DPI 特征库自动合并构建系统
+# Panabit 系统升级包 DPI 特征库自动合并构建流
 
 本项目基于 GitHub Actions 实现 Panabit 标准版（Linux/x86）系统升级包与最新 DPI 特征库（`dict.so` / `dpi.so`）的**自动同步、版本比对、文件属性保留合并及自动 Release 发布**。
 
