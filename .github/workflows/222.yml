@@ -1,5 +1,4 @@
-name: Panabit Repack with Latest DPI 222
-
+name: Auto PanabitFREE Update & DPI Repacker
 on:
   workflow_dispatch:
   schedule:
@@ -229,7 +228,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          name: Panabit Standard (x86/Linux) - DPI Updated ${{ env.RELEASE_TAG }}
+          name: PanabitFREE (x86/Linux) - DPI Updated ${{ env.RELEASE_TAG }}
           body: |
             本 Release 由 GitHub Actions 自动构建，自动合并Panabit标准版（PanabitFREE）最新升级包与 DPI Linux amd64 特征包。
 
