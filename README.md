@@ -20,7 +20,7 @@
 ├── .github/
 │   └── workflows/
 │       └── repack.yml          # GitHub Actions 工作流配置文件
-├── DPI/                        # 存放 DPI 特征包 (.pdb 或 .tar.gz)
+├── DPI/                        # 存放 DPI 特征包 (.pdb)
 ├── Panabit/                    # 存放 Panabit 标准版系统升级包 (.tar.gz)
 ├── ISO/                        # 存放 Panabit 标准版系统安装包 (.ISO) 当前流只做备份！
 └── README.md                   # 项目说明文档
