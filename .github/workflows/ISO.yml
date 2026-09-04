@@ -1,0 +1,265 @@
+name: Auto PanabitFREE Update & DPI Repacker
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 10 * * *' # 北京时间 (UTC+8) 每天 18:00 自动运行
+
+permissions:
+  contents: write
+
+jobs:
+  repack-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          pip install playwright requests
+          playwright install --with-deps chromium
+          sudo apt-get update && sudo apt-get install -y p7zip-full file
+
+      - name: Prepare Workspace Directories
+        run: |
+          # 清理同名文件并创建 ISO、Panabit、DPI 目录
+          [ -f "ISO" ] && rm -f "ISO"
+          [ -f "Panabit" ] && rm -f "Panabit"
+          [ -f "DPI" ] && rm -f "DPI"
+          mkdir -p ISO Panabit DPI
+
+      - name: Check Official Updates and Download to Directories
+        id: sync
+        run: |
+          python - << 'EOF'
+          import os, glob, asyncio
+          from playwright.async_api import async_playwright
+
+          async def main():
+              for folder in ['ISO', 'Panabit', 'DPI']:
+                  os.makedirs(folder, exist_ok=True)
+
+              # 1. 获取本地已存在的文件列表
+              local_iso_files = set(os.path.basename(f) for f in glob.glob('ISO/*') if os.path.isfile(f))
+              local_panabit_files = set(os.path.basename(f) for f in glob.glob('Panabit/*') if os.path.isfile(f))
+              local_dpi_files = set(os.path.basename(f) for f in glob.glob('DPI/*') if os.path.isfile(f))
+
+              print(f"本地 ISO 目录文件: {list(local_iso_files)}")
+              print(f"本地 Panabit 目录文件: {list(local_panabit_files)}")
+              print(f"本地 DPI 目录文件: {list(local_dpi_files)}")
+
+              iso_updated = False
+              panabit_updated = False
+              dpi_updated = False
+
+              async with async_playwright() as p:
+                  browser = await p.chromium.launch(headless=True)
+                  context = await browser.new_context(accept_downloads=True, ignore_https_errors=True)
+
+                  # 2. 检查 ISO 系统安装包 (https://download.panabit.com:9443/install.php)
+                  page_iso = await context.new_page()
+                  await page_iso.goto('https://download.panabit.com:9443/install.php', wait_until='networkidle')
+                  pkg_iso = page_iso.locator('div.paui-package-item:has(h6:has-text("PanabitFREE"))')
+                  if await pkg_iso.count() > 0:
+                      download_iso_promise = page_iso.wait_for_event('download')
+                      await pkg_iso.locator('button:has-text("立即下载")').click()
+                      download_iso = await download_iso_promise
+                      official_iso_filename = download_iso.suggested_filename
+
+                      print(f"官方最新 PanabitFREE ISO 文件名: {official_iso_filename}")
+                      if official_iso_filename not in local_iso_files:
+                          print("检测到 ISO 系统安装包有更新/本地缺失，开始保存...")
+                          save_path = os.path.join('ISO', official_iso_filename)
+                          await download_iso.save_as(save_path)
+                          iso_updated = True
+                      else:
+                          print("ISO 系统安装包版本与本地一致，跳过下载。")
+
+                  # 3. 检查 PanabitFREE 系统升级包
+                  page1 = await context.new_page()
+                  await page1.goto('https://download.panabit.com:9443/?product=panabit', wait_until='networkidle')
+                  standard_tab = page1.locator('text=标准版')
+                  if await standard_tab.count() > 0:
+                      await standard_tab.first.click()
+                      await page1.wait_for_timeout(1000)
+
+                  pkg_item1 = page1.locator('div.paui-package-item:has(h6:has-text("PanabitFREE"))')
+
+                  download1_promise = page1.wait_for_event('download')
+                  await pkg_item1.locator('button:has-text("立即下载")').click()
+                  download1 = await download1_promise
+                  official_main_filename = download1.suggested_filename
+
+                  print(f"官方最新 PanabitFREE 系统升级包文件名: {official_main_filename}")
+                  if official_main_filename not in local_panabit_files:
+                      print("检测到 PanabitFREE 系统升级包有更新/本地缺失，开始保存...")
+                      save_path = os.path.join('Panabit', official_main_filename)
+                      await download1.save_as(save_path)
+                      panabit_updated = True
+                  else:
+                      print("PanabitFREE 系统升级包版本与本地一致，跳过下载。")
+
+                  # 4. 检查 DPI 特征库
+                  page2 = await context.new_page()
+                  await page2.goto('https://download.panabit.com:9443/dpi.php', wait_until='networkidle')
+                  pkg_item2 = page2.locator('div.paui-package-item:has(h6:has-text("DPI_Linux")):has(h6:has-text("amd64"))')
+
+                  download2_promise = page2.wait_for_event('download')
+                  await pkg_item2.locator('button:has-text("立即下载")').click()
+                  download2 = await download2_promise
+                  official_dpi_filename = download2.suggested_filename
+
+                  print(f"官方最新 DPI 文件名: {official_dpi_filename}")
+                  if official_dpi_filename not in local_dpi_files:
+                      print("检测到官方 DPI 特征库有更新/本地缺失，开始保存...")
+                      save_path = os.path.join('DPI', official_dpi_filename)
+                      await download2.save_as(save_path)
+                      dpi_updated = True
+                  else:
+                      print("DPI 特征库版本与本地一致，跳过下载。")
+
+                  await browser.close()
+
+              has_changes = iso_updated or panabit_updated or dpi_updated
+
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                  f.write(f'has_official_update={str(has_changes).lower()}\n')
+
+          asyncio.run(main())
+          EOF
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 如果官网 ISO / 升级包 / DPI 有任一更新，Commit & Push 保存到仓库
+      - name: Commit Updated Downloads to Repository
+        if: steps.sync.outputs.has_official_update == 'true'
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+          git add ISO/ Panabit/ DPI/
+          git status
+          git commit -m "Auto sync latest official packages (ISO/Panabit/DPI) [skip ci]" || echo "No changes to commit"
+          git push
+
+      - name: Check If Package Combination Has Been Published
+        id: check_published
+        run: |
+          python - << 'EOF'
+          import os, glob, requests
+
+          panabit_files = sorted(glob.glob('Panabit/*'), key=os.path.getmtime, reverse=True)
+          dpi_files = sorted(glob.glob('DPI/*'), key=os.path.getmtime, reverse=True)
+
+          if not panabit_files or not dpi_files:
+              print("错误: Panabit/ 或 DPI/ 目录为空！")
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                  f.write("should_repack=false\n")
+              exit(0)
+
+          latest_main_name = os.path.basename(panabit_files[0])
+          latest_dpi_name = os.path.basename(dpi_files[0])
+          combination_id = f"{latest_main_name}___{latest_dpi_name}"
+
+          print(f"当前最新组合: Panabit=[{latest_main_name}], DPI=[{latest_dpi_name}]")
+
+          repo = os.environ.get('GITHUB_REPOSITORY')
+          token = os.environ.get('GITHUB_TOKEN')
+          headers_gh = {'Authorization': f'token {token}', 'Accept': 'application/vnd.github.v3+json'}
+
+          last_published_combo = ''
+          rel_res = requests.get(f'https://api.github.com/repos/{repo}/releases/latest', headers=headers_gh)
+          if rel_res.status_code == 200:
+              rel_body = rel_res.json().get('body', '')
+              for line in rel_body.splitlines():
+                  if 'PKG_COMBINATION:' in line:
+                      last_published_combo = line.split('PKG_COMBINATION:')[1].strip()
+
+          print(f"上次已发布的组合: [{last_published_combo}]")
+
+          if combination_id == last_published_combo:
+              print("【提示】当前文件组合与最近一次 GitHub Release 完全一致，无需重复合并打包！")
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                  f.write("should_repack=false\n")
+          else:
+              print("检测到新文件组合，准备开始合并打包...")
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+                  f.write("should_repack=true\n")
+                  f.write(f"used_main_name={latest_main_name}\n")
+                  f.write(f"used_dpi_name={latest_dpi_name}\n")
+                  f.write(f"pkg_combination={combination_id}\n")
+          EOF
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Find Latest Files in Directories and Repack
+        if: steps.check_published.outputs.should_repack == 'true'
+        id: repack
+        run: |
+          LATEST_PANABIT="${{ steps.check_published.outputs.used_main_name }}"
+          LATEST_DPI="${{ steps.check_published.outputs.used_dpi_name }}"
+
+          echo "选用的系统升级包: $LATEST_PANABIT"
+          echo "选用的 DPI 特征包: $LATEST_DPI"
+
+          cp "Panabit/$LATEST_PANABIT" panabit_pkg.tar.gz
+          cp "DPI/$LATEST_DPI" dpi_pkg.pdb
+
+          MAIN_DIR=$(tar -ztf panabit_pkg.tar.gz | head -n 1 | cut -d'/' -f1)
+          echo "升级包根目录名称: $MAIN_DIR"
+
+          tar -zxf panabit_pkg.tar.gz -p
+
+          mkdir -p PDB_EXTRACTED
+          7z x dpi_pkg.pdb -oPDB_EXTRACTED -y > /dev/null
+
+          find PDB_EXTRACTED -type f | while read -r file; do
+              if file "$file" | grep -q "tar archive"; then
+                  tar -xf "$file" -C PDB_EXTRACTED/ -p
+              fi
+          done
+
+          DICT_SRC=$(find PDB_EXTRACTED -name "dict.so" | head -n 1)
+          DPI_SRC=$(find PDB_EXTRACTED -name "dpi.so" | head -n 1)
+
+          cp -pf "$DICT_SRC" "$MAIN_DIR/bin/"
+          cp -pf "$DPI_SRC" "$MAIN_DIR/bin/"
+
+          OUT_NAME="${MAIN_DIR}_x86_Linux_DPI_Updated.tar.gz"
+          tar -zcf "$OUT_NAME" "$MAIN_DIR"
+
+          echo "FINAL_PACKAGE=$OUT_NAME" >> $GITHUB_ENV
+          echo "RELEASE_TAG=v$(date +'%Y.%m.%d-%H%M')" >> $GITHUB_ENV
+
+      - name: Publish to GitHub Releases
+        if: steps.check_published.outputs.should_repack == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: PanabitFREE (x86/Linux) - DPI Updated ${{ env.RELEASE_TAG }}
+          body: |
+            本 Release 由 GitHub Actions 自动构建，自动合并Panabit标准版（PanabitFREE）最新升级包与 DPI Linux amd64 特征包。
+
+            ### 📦 合并来源文件
+            - **系统升级包**: `${{ steps.check_published.outputs.used_main_name }}`
+            - **DPI 特征包**: `${{ steps.check_published.outputs.used_dpi_name }}`
+
+            ### 🔧 变更说明
+            - **系统架构**: `x86/Linux (amd64)`
+            - **替换文件** (已保留原始特征库文件属性及修改时间戳):
+              - `bin/dict.so`
+              - `bin/dpi.so`
+
+            <!-- 用于自动校验文件组合是否重复发布的隐藏标记 -->
+            PKG_COMBINATION:${{ steps.check_published.outputs.pkg_combination }}
+          draft: false
+          prerelease: false
+          files: ${{ env.FINAL_PACKAGE }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
